@@ -77,6 +77,8 @@ the bridge sync unattended, but it also means **anyone with filesystem read acce
 
 ## Part B: Run the bridge
 
+### Option 1: Node.js directly
+
 ```sh
 cd bridge
 npm install
@@ -86,6 +88,51 @@ cp .env.example .env
 npm run sync-once   # sanity check: confirms the CLI/profile config works
 npm start
 ```
+
+Run it as a persistent service (systemd unit or `pm2`) so it survives reboots.
+
+### Option 2: Docker
+
+A prebuilt image is published to Docker Hub as
+[`webstas/pebblejoplinbridge`](https://hub.docker.com/r/webstas/pebblejoplinbridge)
+(also buildable locally from `bridge/Dockerfile`). The image bakes in
+`JOPLIN_PROFILE_DIR=/data/joplin-profile`, so mount a volume there and run Part A's config
+against that mounted path first:
+
+```sh
+docker volume create joplin-profile
+docker run --rm -v joplin-profile:/data/joplin-profile webstas/pebblejoplinbridge:latest \
+  joplin --profile /data/joplin-profile config sync.target 9
+# repeat for sync.9.path / sync.9.username / sync.9.password, then run the interactive
+# sync from Part A the same way, mounting the same volume, so the E2EE prompt has a TTY:
+docker run --rm -it -v joplin-profile:/data/joplin-profile webstas/pebblejoplinbridge:latest \
+  joplin --profile /data/joplin-profile sync
+
+docker pull webstas/pebblejoplinbridge:latest
+# or pin a version:
+docker pull webstas/pebblejoplinbridge:0.1.0
+
+docker run -d \
+  --name pebble-joplin-bridge \
+  -p 8077:8077 \
+  -e BRIDGE_TOKEN=changeme \
+  -v joplin-profile:/data/joplin-profile \
+  --restart unless-stopped \
+  webstas/pebblejoplinbridge:latest
+```
+
+#### Environment variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `BRIDGE_TOKEN` | *(required)* | Shared secret the Pebble phone companion sends as `Authorization: Bearer <token>`. Generate one with `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`. |
+| `PORT` | `8077` | Port the bridge HTTP server listens on. |
+| `JOPLIN_PROFILE_DIR` | `/data/joplin-profile` (set in the image) | Directory of the Joplin CLI profile synced with your Joplin Server. Mount a volume here so it persists across container restarts. |
+| `JOPLIN_BIN` | `joplin` | Path/command used to invoke the Joplin CLI. |
+| `SYNC_INTERVAL_MINUTES` | `15` | How often the bridge runs `joplin sync` in the background. Set to `0` to disable and sync only via `POST /api/sync`. |
+| `SYNC_TIMEOUT_MS` | `120000` | Timeout for a single `joplin sync` invocation, in milliseconds. |
+
+### API
 
 The bridge listens on `PORT` (default `8077`) and exposes:
 
@@ -97,10 +144,6 @@ The bridge listens on `PORT` (default `8077`) and exposes:
 - `GET /healthz` - unauthenticated liveness probe
 
 All `/api/*` routes require `Authorization: Bearer <BRIDGE_TOKEN>`.
-
-Run it as a persistent service (systemd unit, `pm2`, or the included `Dockerfile`) so it
-survives reboots - see `bridge/Dockerfile` for a container build. If you use Docker, mount
-a volume at `/data/joplin-profile` and run Part A's config against that mounted path first.
 
 ## Part C: Build and install the watchapp
 
