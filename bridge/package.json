@@ -1,0 +1,19 @@
+{
+  "name": "pebble-joplin-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local REST bridge that syncs a Joplin Server profile via the official Joplin CLI and serves decrypted notes as plain JSON for the Pebble Joplin watchapp.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "sync-once": "node src/sync-once.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}

@@ -1,0 +1,232 @@
+// PebbleKit JS companion. Runs inside the Pebble mobile app on the phone (not on the
+// watch), where it has real network access. Relays AppMessage requests from the watch to
+// the bridge service's HTTP API and streams the JSON responses back over Bluetooth.
+//
+// Keep REQ_/RESP_ constants in sync with pebble-app/src/c/protocol.h.
+
+var REQ_LIST_NOTEBOOKS = 0;
+var REQ_LIST_NOTES = 1;
+var REQ_GET_NOTE = 2;
+
+var RESP_NOTEBOOK_ITEM = 10;
+var RESP_NOTEBOOK_LIST_END = 11;
+var RESP_NOTE_ITEM = 12;
+var RESP_NOTE_LIST_END = 13;
+var RESP_NOTE_CONTENT_CHUNK = 14;
+var RESP_NOTE_CONTENT_END = 15;
+var RESP_ERROR = 99;
+
+// Must comfortably fit alongside the other keys in a single AppMessage dictionary within
+// the watch's 2048-byte inbox buffer (see comm.c INBOX_SIZE).
+var CHUNK_SIZE = 400;
+var XHR_TIMEOUT_MS = 10000;
+
+var sendQueue = [];
+var sending = false;
+
+function getSettings() {
+  return {
+    bridgeUrl: (localStorage.getItem('bridgeUrl') || '').replace(/\/+$/, ''),
+    bridgeToken: localStorage.getItem('bridgeToken') || '',
+  };
+}
+
+function enqueueMessage(dict) {
+  sendQueue.push(dict);
+  processQueue();
+}
+
+function processQueue() {
+  if (sending || sendQueue.length === 0) return;
+  sending = true;
+  var dict = sendQueue.shift();
+  Pebble.sendAppMessage(
+    dict,
+    function () {
+      sending = false;
+      processQueue();
+    },
+    function (e) {
+      console.log('sendAppMessage failed: ' + JSON.stringify(e));
+      sending = false;
+      processQueue();
+    }
+  );
+}
+
+function sendError(reqId, message) {
+  enqueueMessage({
+    resp: RESP_ERROR,
+    reqId: reqId,
+    errorMessage: String(message).substring(0, 100),
+  });
+}
+
+function apiGet(path, callback) {
+  var settings = getSettings();
+  if (!settings.bridgeUrl) {
+    callback('Set the bridge URL in app settings');
+    return;
+  }
+
+  var xhr = new XMLHttpRequest();
+  xhr.timeout = XHR_TIMEOUT_MS;
+  xhr.onload = function () {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      try {
+        callback(null, JSON.parse(xhr.responseText));
+      } catch (e) {
+        callback('Bad response from bridge');
+      }
+    } else if (xhr.status === 401) {
+      callback('Bridge rejected token');
+    } else {
+      callback('Bridge error: ' + xhr.status);
+    }
+  };
+  xhr.onerror = function () {
+    callback('Could not reach bridge');
+  };
+  xhr.ontimeout = function () {
+    callback('Bridge timed out');
+  };
+
+  xhr.open('GET', settings.bridgeUrl + path, true);
+  xhr.setRequestHeader('Authorization', 'Bearer ' + settings.bridgeToken);
+  xhr.send();
+}
+
+function chunkString(str, size) {
+  var chunks = [];
+  for (var i = 0; i < str.length; i += size) {
+    chunks.push(str.substring(i, i + size));
+  }
+  return chunks;
+}
+
+function fetchNotebooks(reqId) {
+  apiGet('/api/notebooks', function (err, body) {
+    if (err) return sendError(reqId, err);
+    var notebooks = body.notebooks || [];
+    notebooks.forEach(function (nb) {
+      enqueueMessage({
+        resp: RESP_NOTEBOOK_ITEM,
+        reqId: reqId,
+        itemId: nb.id,
+        itemTitle: nb.title || '(untitled)',
+      });
+    });
+    enqueueMessage({ resp: RESP_NOTEBOOK_LIST_END, reqId: reqId, itemCount: notebooks.length });
+  });
+}
+
+function fetchNotes(reqId, notebookId) {
+  apiGet('/api/notebooks/' + encodeURIComponent(notebookId) + '/notes', function (err, body) {
+    if (err) return sendError(reqId, err);
+    var notes = body.notes || [];
+    notes.forEach(function (note) {
+      enqueueMessage({
+        resp: RESP_NOTE_ITEM,
+        reqId: reqId,
+        itemId: note.id,
+        itemTitle: note.title || '(untitled)',
+      });
+    });
+    enqueueMessage({ resp: RESP_NOTE_LIST_END, reqId: reqId, itemCount: notes.length });
+  });
+}
+
+function fetchNote(reqId, noteId) {
+  apiGet('/api/notes/' + encodeURIComponent(noteId), function (err, body) {
+    if (err) return sendError(reqId, err);
+    var title = body.title || '(untitled)';
+    var chunks = chunkString(body.body || '', CHUNK_SIZE);
+    if (chunks.length === 0) chunks = [''];
+
+    chunks.forEach(function (chunk, idx) {
+      var msg = {
+        resp: RESP_NOTE_CONTENT_CHUNK,
+        reqId: reqId,
+        chunkText: chunk,
+        chunkIndex: idx,
+        chunkCount: chunks.length,
+      };
+      if (idx === 0) msg.itemTitle = title;
+      enqueueMessage(msg);
+    });
+    enqueueMessage({ resp: RESP_NOTE_CONTENT_END, reqId: reqId, chunkCount: chunks.length });
+  });
+}
+
+Pebble.addEventListener('ready', function () {
+  console.log('Pebble Joplin companion ready');
+});
+
+Pebble.addEventListener('appmessage', function (e) {
+  var payload = e.payload;
+  switch (payload.req) {
+    case REQ_LIST_NOTEBOOKS:
+      fetchNotebooks(payload.reqId);
+      break;
+    case REQ_LIST_NOTES:
+      fetchNotes(payload.reqId, payload.notebookId);
+      break;
+    case REQ_GET_NOTE:
+      fetchNote(payload.reqId, payload.noteId);
+      break;
+    default:
+      console.log('Unknown request type: ' + payload.req);
+  }
+});
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function buildConfigHtml(settings) {
+  return (
+    '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">' +
+    '<style>body{font-family:sans-serif;margin:16px;}label{display:block;margin-top:12px;font-weight:bold;}' +
+    'input{width:100%;box-sizing:border-box;padding:8px;font-size:16px;margin-top:4px;}' +
+    'button{margin-top:20px;padding:10px 16px;font-size:16px;}' +
+    'p.hint{color:#666;font-size:13px;}</style></head><body>' +
+    '<h2>Joplin Bridge Settings</h2>' +
+    '<label>Bridge URL</label>' +
+    '<input id="bridgeUrl" type="text" placeholder="http://192.168.1.10:8077" value="' +
+    escapeHtml(settings.bridgeUrl) +
+    '">' +
+    '<p class="hint">Base URL of the pebble-joplin-bridge service on your network.</p>' +
+    '<label>Bridge Token</label>' +
+    '<input id="bridgeToken" type="text" value="' +
+    escapeHtml(settings.bridgeToken) +
+    '">' +
+    '<p class="hint">Must match BRIDGE_TOKEN in the bridge\'s .env file.</p>' +
+    '<button onclick="save()">Save</button>' +
+    '<script>function save(){' +
+    'var settings={bridgeUrl:document.getElementById("bridgeUrl").value,' +
+    'bridgeToken:document.getElementById("bridgeToken").value};' +
+    'document.location="pebblejs://close#"+encodeURIComponent(JSON.stringify(settings));' +
+    '}</script>' +
+    '</body></html>'
+  );
+}
+
+Pebble.addEventListener('showConfiguration', function () {
+  var url = 'data:text/html,' + encodeURIComponent(buildConfigHtml(getSettings()));
+  Pebble.openURL(url);
+});
+
+Pebble.addEventListener('webviewclosed', function (e) {
+  if (!e.response) return;
+  try {
+    var settings = JSON.parse(decodeURIComponent(e.response));
+    localStorage.setItem('bridgeUrl', settings.bridgeUrl || '');
+    localStorage.setItem('bridgeToken', settings.bridgeToken || '');
+  } catch (ex) {
+    console.log('Failed to parse configuration response: ' + ex);
+  }
+});
