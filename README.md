@@ -46,3 +46,5 @@ the bridge can serve notes - see [`docs/SETUP.md`](docs/SETUP.md).
 | `JOPLIN_BIN` | `joplin` | Path/command used to invoke the Joplin CLI. |
 | `SYNC_INTERVAL_MINUTES` | `15` | How often the bridge runs `joplin sync` in the background. Set to `0` to disable and sync only via `POST /api/sync`. |
 | `SYNC_TIMEOUT_MS` | `120000` | Timeout for a single `joplin sync` invocation, in milliseconds. |
+
+Profile Sync Directory info can be found here https://joplinapp.org/help/dev/spec/user_profile/
