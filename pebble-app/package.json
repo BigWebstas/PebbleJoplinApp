@@ -4,12 +4,14 @@
   "private": true,
   "keywords": ["pebble-app"],
   "author": "",
-  "dependencies": {},
+  "dependencies": {
+    "pebble-clay": "^1.0.4"
+  },
   "pebble": {
     "displayName": "Joplin Notes",
     "uuid": "8f6d2a4e-3b7c-4e1a-9d2f-6c5b1a2e9f30",
     "sdkVersion": "3",
-    "enableMultiJS": false,
+    "enableMultiJS": true,
     "targetPlatforms": [
       "aplite",
       "basalt",

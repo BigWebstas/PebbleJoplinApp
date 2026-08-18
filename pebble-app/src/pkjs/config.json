@@ -1,0 +1,35 @@
+[
+  {
+    "type": "heading",
+    "defaultValue": "Joplin Bridge Settings"
+  },
+  {
+    "type": "input",
+    "messageKey": "bridgeUrl",
+    "label": "Bridge URL",
+    "attributes": {
+      "placeholder": "http://192.168.1.10:8077",
+      "type": "text"
+    }
+  },
+  {
+    "type": "text",
+    "defaultValue": "Base URL of the pebble-joplin-bridge service on your network."
+  },
+  {
+    "type": "input",
+    "messageKey": "bridgeToken",
+    "label": "Bridge Token",
+    "attributes": {
+      "type": "text"
+    }
+  },
+  {
+    "type": "text",
+    "defaultValue": "Must match BRIDGE_TOKEN in the bridge's .env file."
+  },
+  {
+    "type": "submit",
+    "defaultValue": "Save"
+  }
+]

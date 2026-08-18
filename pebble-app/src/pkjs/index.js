@@ -179,53 +179,38 @@ Pebble.addEventListener('appmessage', function (e) {
   }
 });
 
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
+// Clay (https://github.com/pebble/clay) generates and hosts the config webview locally as
+// a data URI, which is the officially maintained path for local config pages - the
+// hand-rolled data:text/html approach this used to use isn't part of the documented/
+// supported API and failed to open at all on the CoreDevices Pebble app.
+var Clay = require('pebble-clay');
+var clayConfig = require('./config.json');
 
-function buildConfigHtml(settings) {
-  return (
-    '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">' +
-    '<style>body{font-family:sans-serif;margin:16px;}label{display:block;margin-top:12px;font-weight:bold;}' +
-    'input{width:100%;box-sizing:border-box;padding:8px;font-size:16px;margin-top:4px;}' +
-    'button{margin-top:20px;padding:10px 16px;font-size:16px;}' +
-    'p.hint{color:#666;font-size:13px;}</style></head><body>' +
-    '<h2>Joplin Bridge Settings</h2>' +
-    '<label>Bridge URL</label>' +
-    '<input id="bridgeUrl" type="text" placeholder="http://192.168.1.10:8077" value="' +
-    escapeHtml(settings.bridgeUrl) +
-    '">' +
-    '<p class="hint">Base URL of the pebble-joplin-bridge service on your network.</p>' +
-    '<label>Bridge Token</label>' +
-    '<input id="bridgeToken" type="text" value="' +
-    escapeHtml(settings.bridgeToken) +
-    '">' +
-    '<p class="hint">Must match BRIDGE_TOKEN in the bridge\'s .env file.</p>' +
-    '<button onclick="save()">Save</button>' +
-    '<script>function save(){' +
-    'var settings={bridgeUrl:document.getElementById("bridgeUrl").value,' +
-    'bridgeToken:document.getElementById("bridgeToken").value};' +
-    'document.location="pebblejs://close#"+encodeURIComponent(JSON.stringify(settings));' +
-    '}</script>' +
-    '</body></html>'
-  );
+// autoHandleEvents is off because Clay defaults to sending saved values to the watch as an
+// AppMessage; bridgeUrl/bridgeToken are only ever used here in pkjs, so they're persisted to
+// localStorage directly instead.
+function buildClayConfig() {
+  var settings = getSettings();
+  var config = JSON.parse(JSON.stringify(clayConfig));
+  config.forEach(function (item) {
+    if (item.messageKey === 'bridgeUrl') item.defaultValue = settings.bridgeUrl;
+    if (item.messageKey === 'bridgeToken') item.defaultValue = settings.bridgeToken;
+  });
+  return config;
 }
 
 Pebble.addEventListener('showConfiguration', function () {
-  var url = 'data:text/html,' + encodeURIComponent(buildConfigHtml(getSettings()));
-  Pebble.openURL(url);
+  var clay = new Clay(buildClayConfig(), null, { autoHandleEvents: false });
+  Pebble.openURL(clay.generateUrl());
 });
 
 Pebble.addEventListener('webviewclosed', function (e) {
   if (!e.response) return;
   try {
-    var settings = JSON.parse(decodeURIComponent(e.response));
-    localStorage.setItem('bridgeUrl', settings.bridgeUrl || '');
-    localStorage.setItem('bridgeToken', settings.bridgeToken || '');
+    var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
+    var settings = clay.getSettings(e.response, false);
+    if (settings.bridgeUrl) localStorage.setItem('bridgeUrl', settings.bridgeUrl.value || '');
+    if (settings.bridgeToken) localStorage.setItem('bridgeToken', settings.bridgeToken.value || '');
   } catch (ex) {
     console.log('Failed to parse configuration response: ' + ex);
   }
